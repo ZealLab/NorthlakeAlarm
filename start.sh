@@ -8,7 +8,13 @@ if command -v fuser >/dev/null 2>&1; then
 fi
 
 # Trap Ctrl+C (SIGINT) and ensure the entire process group is killed cleanly
-trap 'echo -e "\nCaught Ctrl-C. Terminating server..."; kill 0 2>/dev/null; exit 0' SIGINT SIGTERM EXIT
+cleanup() {
+    echo -e "\nCaught signal. Terminating server..."
+    trap - SIGINT SIGTERM EXIT
+    kill 0 2>/dev/null
+    exit 0
+}
+trap cleanup SIGINT SIGTERM EXIT
 
 # Start the uvicorn server serving backend API and static frontend
 echo "Starting NorthlakeAlarm backend..."
