@@ -30,7 +30,7 @@ echo "Starting NorthlakeAlarm backend..."
 if [ ! -d "/home/rbowen/Repos/NorthlakeAlarm/backend/venv" ]; then
     echo "Creating virtual environment..."
     cd /home/rbowen/Repos/NorthlakeAlarm
-    python3 -m venv backend/venv
+    python3 -m venv --system-site-packages backend/venv
     source backend/venv/bin/activate
     pip install -r requirements.txt
 else

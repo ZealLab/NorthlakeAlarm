@@ -34,8 +34,15 @@ class GPIOService:
             try:
                 # Assuming NC (Normally Closed) sensors: Button pressed (low voltage) = SECURE
                 btn = Button(pin, pull_up=True, bounce_time=0.05)
-                btn.when_pressed = lambda z=zone_id: self._on_secure(z)
-                btn.when_released = lambda z=zone_id: self._on_tripped(z)
+                # gpiozero passes the button itself to the handler if it accepts arguments.
+                def make_handlers(z):
+                    return (
+                        lambda _btn: self._on_secure(z),
+                        lambda _btn: self._on_tripped(z)
+                    )
+                secure_handler, tripped_handler = make_handlers(zone_id)
+                btn.when_pressed = secure_handler
+                btn.when_released = tripped_handler
                 self.buttons[zone_id] = btn
                 logging.info(f"Initialized Zone {zone_id} on GPIO {pin}")
             except Exception as e:
