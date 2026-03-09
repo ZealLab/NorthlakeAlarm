@@ -1,6 +1,40 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+
+# Install system dependencies if missing
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1 || ! python3 -m venv -h >/dev/null 2>&1; then
+    echo "Missing dependencies. Installing Python, Node, NPM, and Venv (requires sudo)..."
+    sudo apt-get update
+    sudo apt-get install -y python3 python3-venv python3-pip nodejs npm
+fi
+
+# Set up systemd service if it doesn't exist
+SERVICE_FILE="/etc/systemd/system/northlakealarm.service"
+if [ ! -f "$SERVICE_FILE" ]; then
+    echo "Systemd service not found. Creating and enabling northlakealarm.service (requires sudo)..."
+    cat <<EOF | sudo tee "$SERVICE_FILE" > /dev/null
+[Unit]
+Description=Northlake Alarm System Dashboard
+After=network.target
+
+[Service]
+User=$USER
+WorkingDirectory=$SCRIPT_DIR
+ExecStart=$SCRIPT_DIR/start.sh
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable northlakealarm.service
+    echo "Northlake Alarm service configured and enabled to start on boot!"
+fi
+
 # Check if the port is already in use and forcefully kill it before starting
 if command -v fuser >/dev/null 2>&1; then
     echo "Ensuring port 8081 is free..."
