@@ -79,6 +79,11 @@ async def get_metrics():
     return {"temperature": temp_str, "uptime": uptime_str}
 
 # Mount frontend build if it exists
-frontend_path = os.path.join(os.path.dirname(__file__), "../frontend/dist")
+base_dir = os.path.dirname(os.path.abspath(__file__))
+frontend_path = os.path.abspath(os.path.join(base_dir, "../frontend/dist"))
 if os.path.exists(frontend_path):
     app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
+else:
+    @app.get("/")
+    async def root():
+        return {"detail": "Frontend not found", "path_checked": frontend_path}
