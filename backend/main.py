@@ -1,89 +1,102 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from gpio_service import gpio_service
-from state_manager import global_state_manager, SystemState
-import asyncio
 import os
+import time
 import json
 import logging
+import paho.mqtt.client as mqtt
+from gpiozero import Button
 
-app = FastAPI(title="NorthlakeAlarm Dashboard")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("alarm-backend")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "mosquitto")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
 
-@app.on_event("startup")
-async def startup_event():
-    # Start the GPIO service attached to the current running event loop
-    loop = asyncio.get_running_loop()
-    gpio_service.start(loop)
+ZONES = {
+    1: {"pin": 17, "name": "Zone 1"},
+    2: {"pin": 27, "name": "Zone 2"},
+    3: {"pin": 22, "name": "Zone 3"},
+    4: {"pin": 23, "name": "Zone 4"},
+    5: {"pin": 24, "name": "Zone 5"},
+    6: {"pin": 25, "name": "Zone 6"},
+}
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    global_state_manager.ws_clients.add(websocket)
-    # Send immediate state on connect
-    await global_state_manager.broadcast_state()
-    try:
-        while True:
-            data = await websocket.receive_text()
-            try:
-                cmd = json.loads(data)
-                command_type = cmd.get("command")
-                if command_type == "ARM_FULL":
-                    global_state_manager.state = SystemState.ARMED_FULL
-                elif command_type == "ARM_PARTIAL":
-                    global_state_manager.state = SystemState.ARMED_PARTIAL
-                elif command_type == "DISARM":
-                    global_state_manager.state = SystemState.DISARMED
-                    if global_state_manager.entry_delay_task:
-                        global_state_manager.entry_delay_task.cancel()
-                        global_state_manager.entry_delay_task = None
-                await global_state_manager.broadcast_state()
-            except Exception as e:
-                logging.error(f"Error handling WS command: {e}")
-    except WebSocketDisconnect:
-        global_state_manager.ws_clients.remove(websocket)
+buttons = {}
+client = mqtt.Client(client_id="alarm-backend")
 
-@app.get("/api/status")
-async def get_status():
-    return {
-        "state": global_state_manager.state.value,
-        "zones": global_state_manager.zone_states
-    }
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        logger.info("Connected to MQTT Broker!")
+        publish_discovery()
+        # Publish initial state
+        for z_id in ZONES:
+            if z_id in buttons:
+                state = "ON" if buttons[z_id].is_pressed else "OFF"
+                publish_state(z_id, state)
+    else:
+        logger.error(f"Failed to connect, return code {rc}")
 
-@app.get("/api/metrics")
-async def get_metrics():
-    try:
-        with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
-            temp = float(f.read()) / 1000.0
-            temp_str = f"{temp:.1f}°C"
-    except Exception:
-        temp_str = "N/A"
+def publish_discovery():
+    for z_id, info in ZONES.items():
+        topic = f"homeassistant/binary_sensor/northlake_zone_{z_id}/config"
+        payload = {
+            "name": info["name"],
+            "device_class": "window" if z_id != 6 else "door",
+            "state_topic": f"northlake/zone/{z_id}/state",
+            "unique_id": f"northlake_zone_{z_id}",
+            "device": {
+                "identifiers": ["northlake_alarm_panel"],
+                "name": "Northlake Alarm Panel",
+                "manufacturer": "Northlake",
+                "model": "Pi 3B+"
+            }
+        }
+        client.publish(topic, json.dumps(payload), retain=True)
+    logger.info("Published HA Auto-Discovery payload for all zones.")
+
+def publish_state(zone_id, state):
+    topic = f"northlake/zone/{zone_id}/state"
+    client.publish(topic, state, retain=True)
+    logger.info(f"Zone {zone_id} state changed to {state}")
+
+def setup_gpio():
+    # Use BCM numbering (default for gpiozero)
+    for z_id, info in ZONES.items():
+        try:
+            # pull_up=True means normally open switches (connected to ground) will read False when pressed (closed)
+            # Depending on the wired hardware state, this might need to reverse (e.g., active high vs active low).
+            # We assume active low: circuit closed = pin connected to GND = pressed
+            btn = Button(info["pin"], pull_up=True, bounce_time=0.1)
+            
+            def make_press_handler(zid):
+                return lambda: publish_state(zid, "ON") # Tripped
+                
+            def make_release_handler(zid):
+                return lambda: publish_state(zid, "OFF") # Secure
+                
+            btn.when_pressed = make_press_handler(z_id)
+            btn.when_released = make_release_handler(z_id)
+            buttons[z_id] = btn
+            logger.info(f"Registered GPIO for Zone {z_id} on pin {info['pin']}")
+        except Exception as e:
+            logger.error(f"Failed to setup pin for Zone {z_id}: {e}")
+
+def main():
+    logger.info("Starting Northlake Alarm Minimal MQTT Backend...")
+    setup_gpio()
+
+    client.on_connect = on_connect
     
-    try:
-        with open('/proc/uptime', 'r') as f:
-            uptime_seconds = float(f.readline().split()[0])
-            hours = int(uptime_seconds // 3600)
-            minutes = int((uptime_seconds % 3600) // 60)
-            uptime_str = f"{hours}h{minutes}m"
-    except Exception:
-        uptime_str = "N/A"
-        
-    return {"temperature": temp_str, "uptime": uptime_str}
+    # Try to connect with retry logic
+    connected = False
+    while not connected:
+        try:
+            client.connect(MQTT_BROKER, MQTT_PORT, 60)
+            connected = True
+        except Exception as e:
+            logger.warning(f"Connection to MQTT failed: {e}. Retrying in 5s...")
+            time.sleep(5)
+            
+    client.loop_forever()
 
-# Mount frontend build if it exists
-base_dir = os.path.dirname(os.path.abspath(__file__))
-frontend_path = os.path.abspath(os.path.join(base_dir, "../frontend/dist"))
-if os.path.exists(frontend_path):
-    app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
-else:
-    @app.get("/")
-    async def root():
-        return {"detail": "Frontend not found", "path_checked": frontend_path}
+if __name__ == "__main__":
+    main()
