@@ -30,7 +30,7 @@ def on_connect(client, userdata, flags, rc):
         # Publish initial state
         for z_id in ZONES:
             if z_id in buttons:
-                state = "ON" if buttons[z_id].is_pressed else "OFF"
+                state = "OFF" if buttons[z_id].is_pressed else "ON"
                 publish_state(z_id, state)
     else:
         logger.error(f"Failed to connect, return code {rc}")
@@ -68,10 +68,10 @@ def setup_gpio():
             btn = Button(info["pin"], pull_up=True, bounce_time=0.1)
             
             def make_press_handler(zid):
-                return lambda: publish_state(zid, "ON") # Tripped
+                return lambda: publish_state(zid, "OFF") # Secure
                 
             def make_release_handler(zid):
-                return lambda: publish_state(zid, "OFF") # Secure
+                return lambda: publish_state(zid, "ON") # Tripped
                 
             btn.when_pressed = make_press_handler(z_id)
             btn.when_released = make_release_handler(z_id)
