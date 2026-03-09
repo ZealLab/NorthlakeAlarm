@@ -16,6 +16,15 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM EXIT
 
+# Build the frontend if the dist folder is missing (due to .gitignore)
+echo "Checking frontend build..."
+if [ ! -d "/home/rbowen/Repos/NorthlakeAlarm/frontend/dist" ]; then
+    echo "Frontend dist not found. Building..."
+    cd /home/rbowen/Repos/NorthlakeAlarm/frontend
+    npm install
+    npm run build
+fi
+
 # Start the uvicorn server serving backend API and static frontend
 echo "Starting NorthlakeAlarm backend..."
 if [ ! -d "/home/rbowen/Repos/NorthlakeAlarm/backend/venv" ]; then
